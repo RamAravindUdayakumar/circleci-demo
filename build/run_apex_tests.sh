@@ -18,4 +18,4 @@ echo "Deploying source to org"
 sfdx force:source:deploy --sourcepath force-app --targetusername DevHub
 
 echo "Testing code in org"
-sf apex run test --test-level RunLocalTests --output-dir test-results --result-format tap --target-org DevHub
+sfdx force:apex:test:run --testlevel RunLocalTests --outputdir test-results --resultformat tap --targetusername DevHub
