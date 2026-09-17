@@ -2,7 +2,7 @@ version: 2.1
 jobs:
   run-tests:
     docker:
-      - image: circleci/node:latest
+      - image: cimg/node:lts
     steps:
       - checkout
       - restore_cache:
@@ -24,9 +24,10 @@ jobs:
           command: . build/run_apex_tests.sh
       - store_test_results:
           path: test-results
+
   code-review:
     docker:
-      - image: circleci/node:latest
+      - image: cimg/node:lts
     steps:
       - checkout
       - restore_cache:
@@ -45,9 +46,10 @@ jobs:
           command: . build/run_sfdx_scanner.sh
       - store_artifacts:
           path: sfdxScannerAnalysis.csv
+
   deploy-code:
     docker:
-      - image: circleci/node:latest
+      - image: cimg/node:lts
     steps:
       - checkout
       - restore_cache:
@@ -67,6 +69,7 @@ jobs:
       - run:
           name: Deploy to Org
           command: . build/deploy_code.sh
+
 workflows:
   version: 2
   validate:
