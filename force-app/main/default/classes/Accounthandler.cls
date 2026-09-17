@@ -1,4 +1,4 @@
-public with sharing class AccountController {
+public with sharing class Accounthandler {
 
     // Retrieve active accounts with their industry and annual revenue
     @AuraEnabled(cacheable=true)
