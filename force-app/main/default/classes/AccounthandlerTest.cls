@@ -17,7 +17,7 @@ private class AccounthandlerTest {
     @isTest
     static void testGetRecentAccounts() {
         Test.startTest();
-        List<Account> result = AccountController.getRecentAccounts(3);
+        List<Account> result = Accounthandler.getRecentAccounts(3);
         Test.stopTest();
 
         Assert.areEqual(3, result.size(), 'Should return exactly 3 accounts based on the limit.');
@@ -27,7 +27,7 @@ private class AccounthandlerTest {
     @isTest
     static void testCreateAccountSuccess() {
         Test.startTest();
-        Account newAcc = AccountController.createAccount('Acme Corp', 'Manufacturing', '1234567890');
+        Account newAcc = Accounthandler.createAccount('Acme Corp', 'Manufacturing', '1234567890');
         Test.stopTest();
 
         Assert.isNotNull(newAcc.Id, 'Account should have been inserted and received an Id.');
@@ -48,7 +48,7 @@ private class AccounthandlerTest {
 
         Test.startTest();
         try {
-            AccountController.createAccount('', 'Finance', '1234567890');
+            Accounthandler.createAccount('', 'Finance', '1234567890');
         } catch (AuraHandledException e) {
             exceptionThrown = true;
         }
