@@ -1,3 +1,4 @@
+@SuppressWarnings('PMD.ApexDoc')
 public with sharing class Accounthandler {
 
     // Retrieve active accounts with their industry and annual revenue
