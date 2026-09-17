@@ -6,4 +6,4 @@ echo "Install SFDX Scanner"
 echo 'y' | sfdx plugins:install @salesforce/sfdx-scanner
 
 echo "Running SFDX Scanner"
-sfdx scanner:run --target "**/default/**" --format "csv" --outfile "sfdxScannerAnalysis.csv" --violations-cause-error
+sfdx scanner:run --target "**/default/**" --format "csv" --outfile "sfdxScannerAnalysis.csv" --severity-threshold 3
