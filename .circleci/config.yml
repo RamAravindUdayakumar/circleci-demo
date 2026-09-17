@@ -7,13 +7,13 @@ jobs:
       - checkout
       - restore_cache:
           keys:
-            - dependency-cache-{{ checksum "package.json" }}
-            - dependency-cache-
+            - dependency-cache-v2-{{ checksum "package.json" }}
+            - dependency-cache-v2-
       - run:
           name: Install Dependencies
           command: . build/install_dependencies.sh
       - save_cache:
-          key: dependency-cache-{{ checksum "package.json" }}
+          key: dependency-cache-v2-{{ checksum "package.json" }}
           paths:
             - node_modules
       - run: 
@@ -32,13 +32,13 @@ jobs:
       - checkout
       - restore_cache:
           keys:
-            - dependency-cache-{{ checksum "package.json" }}
-            - dependency-cache-
+            - dependency-cache-v2-{{ checksum "package.json" }}
+            - dependency-cache-v2-
       - run:
           name: Install Dependencies
           command: . build/install_dependencies.sh
       - save_cache:
-          key: dependency-cache-{{ checksum "package.json" }}
+          key: dependency-cache-v2-{{ checksum "package.json" }}
           paths:
             - node_modules
       - run:
@@ -54,13 +54,13 @@ jobs:
       - checkout
       - restore_cache:
           keys:
-            - dependency-cache-{{ checksum "package.json" }}
-            - dependency-cache-
+            - dependency-cache-v2-{{ checksum "package.json" }}
+            - dependency-cache-v2-
       - run:
           name: "Install Dependencies"
           command: . build/install_dependencies.sh
       - save_cache:
-          key: dependency-cache-{{ checksum "package.json" }}
+          key: dependency-cache-v2-{{ checksum "package.json" }}
           paths:
             - node_modules
       - run: 
