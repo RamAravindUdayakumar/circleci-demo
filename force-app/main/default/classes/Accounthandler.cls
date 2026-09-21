@@ -28,6 +28,6 @@ public with sharing class Accounthandler {
         );
 
         insert as user newAcc;
-        return newAcc;
+        return newAcc; 
     }
 }

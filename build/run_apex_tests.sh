@@ -14,8 +14,17 @@
 #echo "Deploying code to org"
 #sfdx force:mdapi:deploy --checkonly -u DevHub -d test_code/ -w -1 -l RunLocalTests
 
-echo "Deploying source to org"
-sf project deploy start --source-dir force-app --target-org DevHub
+#echo "Deploying source to org"
+#sf project deploy start --source-dir force-app --target-org DevHub
 
-echo "Testing code in org"
-sf apex run test --test-level RunLocalTests --output-dir test-results --result-format tap --target-org DevHub
+#echo "Testing code in org"
+#sf apex run test --test-level RunLocalTests --output-dir test-results --result-format tap --target-org DevHub
+
+set -eo pipefail
+
+echo "Validating code and executing local tests against DevHub..."
+sf project deploy validate \
+  --source-dir force-app \
+  --target-org DevHub \
+  --test-level RunLocalTests \
+  --wait 30
