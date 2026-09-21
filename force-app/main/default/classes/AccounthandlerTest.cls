@@ -8,7 +8,8 @@ private class AccounthandlerTest {
             accounts.add(new Account(
                 Name = 'Test Account ' + i,
                 Industry = 'Technology',
-                Phone = '987654321' + i
+                Phone = '987654321' + i,
+                Rating = 'Warm'
             ));
         }
         insert accounts;

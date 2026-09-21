@@ -23,7 +23,8 @@ public with sharing class Accounthandler {
         Account newAcc = new Account(
             Name = accountName,
             Industry = industry,
-            Phone = phone
+            Phone = phone,
+            Rating = 'Hot'
         );
 
         insert as user newAcc;
