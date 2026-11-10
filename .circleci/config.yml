@@ -314,7 +314,7 @@ workflows:
           username: SF_QA_USERNAME
           client_id: SF_QA_CLIENT_ID
           instance_url: SF_QA_INSTANCE_URL
-          jwt_key: JWT_KEY_QA
+          jwt_key: SANDBOX_CERT_KEY
           test_level: NoTestRun
           dry_run: true
 
@@ -351,7 +351,7 @@ workflows:
           username: SF_QA_USERNAME
           client_id: SF_QA_CLIENT_ID
           instance_url: SF_QA_INSTANCE_URL
-          jwt_key: JWT_KEY_QA
+          jwt_key: SANDBOX_CERT_KEY
           test_level: NoTestRun
           dry_run: true
           filters:
@@ -363,7 +363,7 @@ workflows:
           username: SF_QA_USERNAME
           client_id: SF_QA_CLIENT_ID
           instance_url: SF_QA_INSTANCE_URL
-          jwt_key: JWT_KEY_QA
+          jwt_key: SANDBOX_CERT_KEY
           test_level: NoTestRun
           dry_run: false
           requires:
