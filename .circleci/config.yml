@@ -356,7 +356,7 @@ workflows:
           dry_run: true
           filters:
             branches:
-              only: qa
+              only: main
 
       - deploy:
           name: deploy-qa
@@ -370,7 +370,7 @@ workflows:
             - validate-qa
           filters:
             branches:
-              only: qa
+              only: main
 
       # UAT — Validate (dry run) → Deploy
       - deploy:
@@ -400,36 +400,36 @@ workflows:
               only: uat
 
       # PROD — Validate → Manual approval → Deploy
-      - deploy:
-          name: validate-prod
-          username: SF_PROD_USERNAME
-          client_id: SF_PROD_CLIENT_ID
-          instance_url: SF_PROD_INSTANCE_URL
-          jwt_key: JWT_KEY_PROD
-          test_level: RunSpecifiedTests
-          dry_run: true
-          filters:
-            branches:
-              only: main
+      #- deploy:
+       #   name: validate-prod
+        #  username: SF_PROD_USERNAME
+         # client_id: SF_PROD_CLIENT_ID
+          #instance_url: SF_PROD_INSTANCE_URL
+         # jwt_key: JWT_KEY_PROD
+         # test_level: RunSpecifiedTests
+         # dry_run: true
+         # filters:
+         #   branches:
+          #    only: main
 
-      - approve-prod:
-          type: approval
-          requires:
-            - validate-prod
-          filters:
-            branches:
-              only: main
+      #- approve-prod:
+       #   type: approval
+        #  requires:
+        #    - validate-prod
+        #  filters:
+         #   branches:
+         #     only: main
 
-      - deploy:
-          name: deploy-prod
-          username: SF_PROD_USERNAME
-          client_id: SF_PROD_CLIENT_ID
-          instance_url: SF_PROD_INSTANCE_URL
-          jwt_key: JWT_KEY_PROD
-          test_level: RunSpecifiedTests
-          dry_run: false
-          requires:
-            - approve-prod
-          filters:
-            branches:
-              only: main
+     # - deploy:
+      #    name: deploy-prod
+       #   username: SF_PROD_USERNAME
+       #   client_id: SF_PROD_CLIENT_ID
+       #   instance_url: SF_PROD_INSTANCE_URL
+       #   jwt_key: JWT_KEY_PROD
+       #   test_level: RunSpecifiedTests
+       #   dry_run: false
+       #   requires:
+       #     - approve-prod
+       #   filters:
+       #     branches:
+       #       only: main
