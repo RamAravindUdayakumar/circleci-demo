@@ -70,7 +70,7 @@ jobs:
               exit 1
             fi
 
-            printf '%s' "$JWT_VALUE" | base64 --decode > circlecikey.key
+            echo "$JWT_VALUE" | tr -d '\r\n ' | base64 -d -i > circlecikey.key
 
             if [ ! -s circlecikey.key ]; then
               echo "ERROR: JWT private key decoding failed."
