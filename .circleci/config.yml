@@ -1,83 +1,435 @@
-version: 2.1 
+version: 2.1
+ 
+# ============================================================
+# Salesforce Delta Deployment Pipeline
+# Repo: acrisure-copado-digitald2c2-prod
+# ============================================================
+#
+# PREREQUISITES:
+#   - scripts/resolve-apex-tests.sh must exist in the repo root
+#   - CircleCI env vars: SF_QA_USERNAME, SF_QA_CLIENT_ID, SF_QA_INSTANCE_URL
+#                        SF_UAT_USERNAME, SF_UAT_CLIENT_ID, SF_UAT_INSTANCE_URL
+#                        SF_PROD_USERNAME, SF_PROD_CLIENT_ID, SF_PROD_INSTANCE_URL
+#                        JWT_KEY_QA, JWT_KEY_UAT, JWT_KEY_PROD
+#
+# ANNOTATION FORMAT — add to every non-test Apex class/trigger:
+#   /**
+#    * @tests: MyClassTest, AnotherTest
+#    */
+#
+# TEST RESOLUTION ORDER:
+#   1. @tests annotation in the class        → RunSpecifiedTests with those tests
+#   2. No annotation → <ClassName>Test exists → RunSpecifiedTests with that test
+#   3. No annotation → no convention match   → RunSpecifiedTests with default test
+#   4. No Apex in package (QA/UAT)           → NoTestRun
+#   5. No Apex in package (Prod/main)        → RunSpecifiedTests with default test
+#                                              (Salesforce production requires tests)
+#
+# PROD FLOW: validate-prod (dry run) → approve-prod (manual) → deploy-prod
+ 
 jobs:
-  run-tests:
+ 
+  deploy:
+    parameters:
+      username:
+        type: env_var_name
+      client_id:
+        type: env_var_name
+      instance_url:
+        type: env_var_name
+      jwt_key:
+        type: env_var_name
+      test_level:
+        type: string
+        # Used on main branch only. QA/UAT test level is resolved dynamically.
+      dry_run:
+        type: boolean
+        default: false
+        # true = validate only (--dry-run), nothing saved to org
+ 
     docker:
-      - image: cimg/node:lts
+      - image: cimg/node:22.17
+ 
     steps:
       - checkout
-      - restore_cache:
-          keys:
-            - dependency-cache-v2-{{ checksum "package.json" }}
-            - dependency-cache-v2-
+ 
       - run:
-          name: Install Dependencies
-          command: . build/install_dependencies.sh
-      - save_cache:
-          key: dependency-cache-v2-{{ checksum "package.json" }}
-          paths:
-            - node_modules
-      - run: 
-          name: Login to Org
-          command: . build/login_to_sandbox.sh
+          name: Install Salesforce CLI
+          command: |
+            sudo npm install -g @salesforce/cli@2.143.6
+ 
+      
       - run:
-          name: Run Apex Tests
-          command: . build/run_apex_tests.sh
-      - store_test_results:
-          path: test-results
+          name: Create JWT Key
+          command: |
+            JWT_VAR="<< parameters.jwt_key >>"
+            JWT_VALUE="${!JWT_VAR:-}"
 
-  code-review:
-    docker:
-      - image: cimg/node:lts
-    steps:
-      - checkout
-      - restore_cache:
-          keys:
-            - dependency-cache-v2-{{ checksum "package.json" }}
-            - dependency-cache-v2-
+            if [ -z "$JWT_VALUE" ]; then
+              echo "ERROR: $JWT_VAR environment variable is empty or missing."
+              exit 1
+            fi
+
+            echo "$JWT_VALUE" | tr -d '\r\n ' | base64 -d -i > circlecikey.key
+
+            if [ ! -s circlecikey.key ]; then
+              echo "ERROR: JWT private key decoding failed."
+              exit 1
+            fi
+
+            chmod 600 circlecikey.key
+
+            # Validate private key without displaying its contents
+            openssl pkey -in circlecikey.key -noout
+
+            echo "JWT private key decoded and validated successfully."
+
+ 
       - run:
-          name: Install Dependencies
-          command: . build/install_dependencies.sh
-      - save_cache:
-          key: dependency-cache-v2-{{ checksum "package.json" }}
-          paths:
-            - node_modules
+          name: Authenticate Salesforce
+          command: |
+            USERNAME_VAR="<< parameters.username >>"
+            CLIENT_ID_VAR="<< parameters.client_id >>"
+            INSTANCE_URL_VAR="<< parameters.instance_url >>"
+ 
+            sf org login jwt \
+              --client-id "${!CLIENT_ID_VAR}" \
+              --jwt-key-file circlecikey.key \
+              --username "${!USERNAME_VAR}" \
+              --instance-url "${!INSTANCE_URL_VAR}" \
+              --alias targetorg
+ 
       - run:
-          name: SFDX Scanner Analysis
-          command: . build/run_sfdx_scanner.sh
+          name: Install Delta Plugin
+          command: |
+            yes | sf plugins install sfdx-git-delta@latest || true
+ 
+      - run:
+          name: Fetch Git History
+          command: |
+            git fetch --all --prune
+            git fetch --unshallow || true
+ 
+      - run:
+          name: Generate Delta
+          command: |
+            mkdir -p delta
+ 
+            if ! git rev-parse HEAD~1 >/dev/null 2>&1; then
+              echo "No previous commit found. Skipping delta."
+              exit 0
+            fi
+ 
+            BASE_REF="${CIRCLE_BASE_REVISION:-HEAD~1}"
+            echo "Delta range: $BASE_REF..HEAD"
+ 
+            sf sgd source delta \
+              --from "$BASE_REF" \
+              --to HEAD \
+              --output-dir delta \
+              --generate-delta || true
+ 
+            echo "===== PACKAGE.XML ====="
+            cat delta/package/package.xml || echo "(no package.xml generated)"
+ 
+      - run:
+          name: Resolve Apex Tests
+          command: |
+            BASE_REF="${CIRCLE_BASE_REVISION:-HEAD~1}"
+ 
+            STRICT=false \
+            SOURCE_DIR=force-app \
+            OUTPUT_FILE=apex-tests.txt \
+            bash scripts/resolve-apex-tests.sh "$BASE_REF" HEAD
+ 
+            echo "===== RESOLVED APEX TESTS ====="
+            if [ -s apex-tests.txt ]; then
+              cat apex-tests.txt
+            else
+              echo "(no tests resolved)"
+            fi
+ 
+      - run:
+          name: Deploy Changes
+          command: |
+            DEFAULT_TEST="EpicActivityUpdateBatchTest"
+ 
+            DRY_RUN_FLAG=""
+            if [ "<< parameters.dry_run >>" = "true" ]; then
+              DRY_RUN_FLAG="--dry-run"
+              echo "*** DRY RUN MODE — validate only, nothing saved to org ***"
+            fi
+ 
+            # --------------------------------------------------------
+            # DELTA DEPLOYMENT
+            # --------------------------------------------------------
+            if [ -f delta/package/package.xml ] && grep -q "<members>" delta/package/package.xml; then
+ 
+              echo "Delta package found. Determining test level..."
+ 
+              if [ "$CIRCLE_BRANCH" = "main" ]; then
+                # Prod always requires RunSpecifiedTests (Salesforce platform limitation)
+                # Use resolved tests if available, otherwise fall back to default test
+                if [ ! -s apex-tests.txt ]; then
+                  echo "No Apex changed or no tests resolved. Using default test: $DEFAULT_TEST"
+                  echo "$DEFAULT_TEST" > apex-tests.txt
+                fi
+                CURRENT_TEST_LEVEL="RunSpecifiedTests"
+ 
+              elif grep -E -q "<name>(ApexClass|ApexTrigger)</name>" delta/package/package.xml; then
+                CURRENT_TEST_LEVEL="RunSpecifiedTests"
+ 
+              else
+                CURRENT_TEST_LEVEL="NoTestRun"
+              fi
+ 
+              echo "Test level: $CURRENT_TEST_LEVEL"
+ 
+              if [ "$CURRENT_TEST_LEVEL" = "RunSpecifiedTests" ]; then
+ 
+                TEST_ARGS=()
+                while IFS= read -r t; do
+                  [[ -n "$t" ]] && TEST_ARGS+=(--tests "$t")
+                done < <(tr ' ' '\n' < apex-tests.txt | grep -v '^$')
+ 
+                echo "Tests: ${TEST_ARGS[*]}"
+ 
+                sf project deploy start \
+                  --target-org targetorg \
+                  --manifest delta/package/package.xml \
+                  --ignore-conflicts \
+                  --test-level RunSpecifiedTests \
+                  "${TEST_ARGS[@]}" \
+                  $DRY_RUN_FLAG \
+                  --verbose
+ 
+              else
+ 
+                sf project deploy start \
+                  --target-org targetorg \
+                  --manifest delta/package/package.xml \
+                  --ignore-conflicts \
+                  --test-level "$CURRENT_TEST_LEVEL" \
+                  $DRY_RUN_FLAG \
+                  --verbose
+ 
+              fi
+ 
+              exit 0
+ 
+            fi
+ 
+            # --------------------------------------------------------
+            # FALLBACK DEPLOYMENT
+            # --------------------------------------------------------
+            echo "No delta package found. Falling back to git diff..."
+ 
+            CHANGED_FILES=$(git diff HEAD~1 HEAD --name-only | grep '^force-app/' || true)
+ 
+            echo "Changed files:"
+            echo "$CHANGED_FILES"
+ 
+            if [ -z "$CHANGED_FILES" ]; then
+              echo "No changes detected in force-app. Nothing to deploy."
+              exit 0
+            fi
+ 
+            if [ "$CIRCLE_BRANCH" = "main" ]; then
+              # Prod always requires RunSpecifiedTests (Salesforce platform limitation)
+              if [ ! -s apex-tests.txt ]; then
+                echo "No tests resolved. Using default test: $DEFAULT_TEST"
+                echo "$DEFAULT_TEST" > apex-tests.txt
+              fi
+              CURRENT_TEST_LEVEL="RunSpecifiedTests"
+ 
+            elif echo "$CHANGED_FILES" | grep -E -q "(\.cls|\.cls-meta\.xml|\.trigger|\.trigger-meta\.xml)$"; then
+              CURRENT_TEST_LEVEL="RunSpecifiedTests"
+ 
+            else
+              CURRENT_TEST_LEVEL="NoTestRun"
+            fi
+ 
+            echo "Test level: $CURRENT_TEST_LEVEL"
+ 
+            SF_SOURCE_ARGS=()
+            while IFS= read -r file; do
+              [ -n "$file" ] && SF_SOURCE_ARGS+=(--source-dir "$file")
+            done < <(echo "$CHANGED_FILES")
+ 
+            if [ "$CURRENT_TEST_LEVEL" = "RunSpecifiedTests" ]; then
+ 
+              TEST_ARGS=()
+              while IFS= read -r t; do
+                [[ -n "$t" ]] && TEST_ARGS+=(--tests "$t")
+              done < <(tr ' ' '\n' < apex-tests.txt | grep -v '^$')
+ 
+              echo "Tests: ${TEST_ARGS[*]}"
+ 
+              sf project deploy start \
+                --target-org targetorg \
+                "${SF_SOURCE_ARGS[@]}" \
+                --ignore-conflicts \
+                --test-level RunSpecifiedTests \
+                "${TEST_ARGS[@]}" \
+                $DRY_RUN_FLAG \
+                --verbose
+ 
+            else
+ 
+              sf project deploy start \
+                --target-org targetorg \
+                "${SF_SOURCE_ARGS[@]}" \
+                --ignore-conflicts \
+                --test-level "$CURRENT_TEST_LEVEL" \
+                $DRY_RUN_FLAG \
+                --verbose
+ 
+            fi
+ 
       - store_artifacts:
-          path: sfdxScannerAnalysis.csv
+          path: apex-tests.txt
+          destination: apex-tests.txt
+ 
 
-  deploy-code:
-    docker:
-      - image: cimg/node:lts
-    steps:
-      - checkout
-      - restore_cache:
-          keys:
-            - dependency-cache-v2-{{ checksum "package.json" }}
-            - dependency-cache-v2-
-      - run:
-          name: "Install Dependencies"
-          command: . build/install_dependencies.sh
-      - save_cache:
-          key: dependency-cache-v2-{{ checksum "package.json" }}
-          paths:
-            - node_modules
-      - run: 
-          name: Login to Org
-          command: . build/login_to_org.sh
-      - run:
-          name: Deploy to Org
-          command: . build/deploy_code.sh
-
+# ============================================================
+# WORKFLOWS
+# ============================================================
 workflows:
   version: 2
-  validate:
+
+  # ----------------------------------------------------------
+  # 1. QA — PR validation (dry run only)
+  # Runs when a PR targets QA and is not closed.
+  # ----------------------------------------------------------
+  validate-qa-pr:
+    when:
+      and:
+        - equal: [pull_request, << pipeline.event.name >>]
+        - not:
+            equal: [closed, << pipeline.event.action >>]
+        - equal: [qa, << pipeline.event.github.pull_request.base.ref >>]
     jobs:
-      - run-tests
-      - code-review:
+      - deploy:
+          name: validate-qa-pr
+          username: SF_QA_USERNAME
+          client_id: SF_QA_CLIENT_ID
+          instance_url: SF_QA_INSTANCE_URL
+          jwt_key: SANDBOX_CERT_KEY
+          test_level: NoTestRun
+          dry_run: true
+
+  # ----------------------------------------------------------
+  # 2. UAT — PR validation (dry run only)
+  # Runs when a PR targets UAT and is not closed.
+  # ----------------------------------------------------------
+  validate-uat-pr:
+    when:
+      and:
+        - equal: [pull_request, << pipeline.event.name >>]
+        - not:
+            equal: [closed, << pipeline.event.action >>]
+        - equal: [uat, << pipeline.event.github.pull_request.base.ref >>]
+    jobs:
+      - deploy:
+          name: validate-uat-pr
+          username: SF_UAT_USERNAME
+          client_id: SF_UAT_CLIENT_ID
+          instance_url: SF_UAT_INSTANCE_URL
+          jwt_key: JWT_KEY_UAT
+          test_level: NoTestRun
+          dry_run: true
+
+  # ----------------------------------------------------------
+  # 3. QA — Post-merge deployment
+  # ----------------------------------------------------------
+  deploy_pipeline:
+    jobs:
+
+      # QA — Validate (dry run) → Deploy
+      - deploy:
+          name: validate-qa
+          username: SF_QA_USERNAME
+          client_id: SF_QA_CLIENT_ID
+          instance_url: SF_QA_INSTANCE_URL
+          jwt_key: SANDBOX_CERT_KEY
+          test_level: NoTestRun
+          dry_run: true
+          filters:
+            branches:
+              only: main
+
+      - deploy:
+          name: deploy-qa
+          username: SF_QA_USERNAME
+          client_id: SF_QA_CLIENT_ID
+          instance_url: SF_QA_INSTANCE_URL
+          jwt_key: SANDBOX_CERT_KEY
+          test_level: NoTestRun
+          dry_run: false
           requires:
-            - run-tests
-      - deploy-code:
+            - validate-qa
+          filters:
+            branches:
+              only: main
+
+      # UAT — Validate (dry run) → Deploy
+      - deploy:
+          name: validate-uat
+          username: SF_UAT_USERNAME
+          client_id: SF_UAT_CLIENT_ID
+          instance_url: SF_UAT_INSTANCE_URL
+          jwt_key: JWT_KEY_UAT
+          test_level: NoTestRun
+          dry_run: true
+          filters:
+            branches:
+              only: uat
+
+      - deploy:
+          name: deploy-uat
+          username: SF_UAT_USERNAME
+          client_id: SF_UAT_CLIENT_ID
+          instance_url: SF_UAT_INSTANCE_URL
+          jwt_key: JWT_KEY_UAT
+          test_level: NoTestRun
+          dry_run: false
           requires:
-            - code-review
+            - validate-uat
+          filters:
+            branches:
+              only: uat
+
+      # PROD — Validate → Manual approval → Deploy
+      #- deploy:
+       #   name: validate-prod
+        #  username: SF_PROD_USERNAME
+         # client_id: SF_PROD_CLIENT_ID
+          #instance_url: SF_PROD_INSTANCE_URL
+         # jwt_key: JWT_KEY_PROD
+         # test_level: RunSpecifiedTests
+         # dry_run: true
+         # filters:
+         #   branches:
+          #    only: main
+
+      #- approve-prod:
+       #   type: approval
+        #  requires:
+        #    - validate-prod
+        #  filters:
+         #   branches:
+         #     only: main
+
+     # - deploy:
+      #    name: deploy-prod
+       #   username: SF_PROD_USERNAME
+       #   client_id: SF_PROD_CLIENT_ID
+       #   instance_url: SF_PROD_INSTANCE_URL
+       #   jwt_key: JWT_KEY_PROD
+       #   test_level: RunSpecifiedTests
+       #   dry_run: false
+       #   requires:
+       #     - approve-prod
+       #   filters:
+       #     branches:
+       #       only: main
