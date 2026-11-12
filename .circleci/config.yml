@@ -1,5 +1,5 @@
 version: 2.1
- 
+
 # ============================================================
 # Salesforce Delta Deployment Pipeline
 # Repo: acrisure-copado-digitald2c2-prod
@@ -26,9 +26,8 @@ version: 2.1
 #                                              (Salesforce production requires tests)
 #
 # PROD FLOW: validate-prod (dry run) → approve-prod (manual) → deploy-prod
- 
+
 jobs:
- 
   deploy:
     parameters:
       username:
@@ -46,19 +45,18 @@ jobs:
         type: boolean
         default: false
         # true = validate only (--dry-run), nothing saved to org
- 
+
     docker:
       - image: cimg/node:22.17
- 
+
     steps:
       - checkout
- 
+
       - run:
           name: Install Salesforce CLI
           command: |
             sudo npm install -g @salesforce/cli@2.143.6
- 
-      
+
       - run:
           name: Create JWT Key
           command: |
@@ -70,7 +68,7 @@ jobs:
               exit 1
             fi
 
-            echo "$JWT_VALUE" | tr -d '\r\n ' | base64 -d -i > circlecikey.key
+            printf '%s' "$JWT_VALUE" | base64 --decode > circlecikey.key
 
             if [ ! -s circlecikey.key ]; then
               echo "ERROR: JWT private key decoding failed."
@@ -84,89 +82,88 @@ jobs:
 
             echo "JWT private key decoded and validated successfully."
 
- 
       - run:
           name: Authenticate Salesforce
           command: |
             USERNAME_VAR="<< parameters.username >>"
             CLIENT_ID_VAR="<< parameters.client_id >>"
             INSTANCE_URL_VAR="<< parameters.instance_url >>"
- 
+
             sf org login jwt \
               --client-id "${!CLIENT_ID_VAR}" \
               --jwt-key-file circlecikey.key \
               --username "${!USERNAME_VAR}" \
               --instance-url "${!INSTANCE_URL_VAR}" \
               --alias targetorg
- 
+
       - run:
           name: Install Delta Plugin
           command: |
             yes | sf plugins install sfdx-git-delta@latest || true
- 
+
       - run:
           name: Fetch Git History
           command: |
             git fetch --all --prune
             git fetch --unshallow || true
- 
+
       - run:
           name: Generate Delta
           command: |
             mkdir -p delta
- 
+
             if ! git rev-parse HEAD~1 >/dev/null 2>&1; then
               echo "No previous commit found. Skipping delta."
               exit 0
             fi
- 
+
             BASE_REF="${CIRCLE_BASE_REVISION:-HEAD~1}"
             echo "Delta range: $BASE_REF..HEAD"
- 
+
             sf sgd source delta \
               --from "$BASE_REF" \
               --to HEAD \
               --output-dir delta \
               --generate-delta || true
- 
+
             echo "===== PACKAGE.XML ====="
             cat delta/package/package.xml || echo "(no package.xml generated)"
- 
+
       - run:
           name: Resolve Apex Tests
           command: |
             BASE_REF="${CIRCLE_BASE_REVISION:-HEAD~1}"
- 
+
             STRICT=false \
             SOURCE_DIR=force-app \
             OUTPUT_FILE=apex-tests.txt \
             bash scripts/resolve-apex-tests.sh "$BASE_REF" HEAD
- 
+
             echo "===== RESOLVED APEX TESTS ====="
             if [ -s apex-tests.txt ]; then
               cat apex-tests.txt
             else
               echo "(no tests resolved)"
             fi
- 
+
       - run:
-          name: Deploy Changes
+          name: Salesforce Deployment Execution
           command: |
             DEFAULT_TEST="EpicActivityUpdateBatchTest"
- 
+
             DRY_RUN_FLAG=""
             if [ "<< parameters.dry_run >>" = "true" ]; then
               DRY_RUN_FLAG="--dry-run"
               echo "*** DRY RUN MODE — validate only, nothing saved to org ***"
             fi
- 
+
             # --------------------------------------------------------
             # DELTA DEPLOYMENT
             # --------------------------------------------------------
             if [ -f delta/package/package.xml ] && grep -q "<members>" delta/package/package.xml; then
- 
+
               echo "Delta package found. Determining test level..."
- 
+
               if [ "$CIRCLE_BRANCH" = "main" ]; then
                 # Prod always requires RunSpecifiedTests (Salesforce platform limitation)
                 # Use resolved tests if available, otherwise fall back to default test
@@ -175,25 +172,25 @@ jobs:
                   echo "$DEFAULT_TEST" > apex-tests.txt
                 fi
                 CURRENT_TEST_LEVEL="RunSpecifiedTests"
- 
+
               elif grep -E -q "<name>(ApexClass|ApexTrigger)</name>" delta/package/package.xml; then
                 CURRENT_TEST_LEVEL="RunSpecifiedTests"
- 
+
               else
                 CURRENT_TEST_LEVEL="NoTestRun"
               fi
- 
+
               echo "Test level: $CURRENT_TEST_LEVEL"
- 
+
               if [ "$CURRENT_TEST_LEVEL" = "RunSpecifiedTests" ]; then
- 
+
                 TEST_ARGS=()
                 while IFS= read -r t; do
                   [[ -n "$t" ]] && TEST_ARGS+=(--tests "$t")
                 done < <(tr ' ' '\n' < apex-tests.txt | grep -v '^$')
- 
+
                 echo "Tests: ${TEST_ARGS[*]}"
- 
+
                 sf project deploy start \
                   --target-org targetorg \
                   --manifest delta/package/package.xml \
@@ -202,9 +199,9 @@ jobs:
                   "${TEST_ARGS[@]}" \
                   $DRY_RUN_FLAG \
                   --verbose
- 
+
               else
- 
+
                 sf project deploy start \
                   --target-org targetorg \
                   --manifest delta/package/package.xml \
@@ -212,28 +209,28 @@ jobs:
                   --test-level "$CURRENT_TEST_LEVEL" \
                   $DRY_RUN_FLAG \
                   --verbose
- 
+
               fi
- 
+
               exit 0
- 
+
             fi
- 
+
             # --------------------------------------------------------
             # FALLBACK DEPLOYMENT
             # --------------------------------------------------------
             echo "No delta package found. Falling back to git diff..."
- 
+
             CHANGED_FILES=$(git diff HEAD~1 HEAD --name-only | grep '^force-app/' || true)
- 
+
             echo "Changed files:"
             echo "$CHANGED_FILES"
- 
+
             if [ -z "$CHANGED_FILES" ]; then
               echo "No changes detected in force-app. Nothing to deploy."
               exit 0
             fi
- 
+
             if [ "$CIRCLE_BRANCH" = "main" ]; then
               # Prod always requires RunSpecifiedTests (Salesforce platform limitation)
               if [ ! -s apex-tests.txt ]; then
@@ -241,30 +238,30 @@ jobs:
                 echo "$DEFAULT_TEST" > apex-tests.txt
               fi
               CURRENT_TEST_LEVEL="RunSpecifiedTests"
- 
+
             elif echo "$CHANGED_FILES" | grep -E -q "(\.cls|\.cls-meta\.xml|\.trigger|\.trigger-meta\.xml)$"; then
               CURRENT_TEST_LEVEL="RunSpecifiedTests"
- 
+
             else
               CURRENT_TEST_LEVEL="NoTestRun"
             fi
- 
+
             echo "Test level: $CURRENT_TEST_LEVEL"
- 
+
             SF_SOURCE_ARGS=()
             while IFS= read -r file; do
               [ -n "$file" ] && SF_SOURCE_ARGS+=(--source-dir "$file")
             done < <(echo "$CHANGED_FILES")
- 
+
             if [ "$CURRENT_TEST_LEVEL" = "RunSpecifiedTests" ]; then
- 
+
               TEST_ARGS=()
               while IFS= read -r t; do
                 [[ -n "$t" ]] && TEST_ARGS+=(--tests "$t")
               done < <(tr ' ' '\n' < apex-tests.txt | grep -v '^$')
- 
+
               echo "Tests: ${TEST_ARGS[*]}"
- 
+
               sf project deploy start \
                 --target-org targetorg \
                 "${SF_SOURCE_ARGS[@]}" \
@@ -273,9 +270,9 @@ jobs:
                 "${TEST_ARGS[@]}" \
                 $DRY_RUN_FLAG \
                 --verbose
- 
+
             else
- 
+
               sf project deploy start \
                 --target-org targetorg \
                 "${SF_SOURCE_ARGS[@]}" \
@@ -283,13 +280,12 @@ jobs:
                 --test-level "$CURRENT_TEST_LEVEL" \
                 $DRY_RUN_FLAG \
                 --verbose
- 
+
             fi
- 
+
       - store_artifacts:
           path: apex-tests.txt
           destination: apex-tests.txt
- 
 
 # ============================================================
 # WORKFLOWS
@@ -314,7 +310,7 @@ workflows:
           username: SF_QA_USERNAME
           client_id: SF_QA_CLIENT_ID
           instance_url: SF_QA_INSTANCE_URL
-          jwt_key: SANDBOX_CERT_KEY
+          jwt_key: JWT_KEY_QA
           test_level: NoTestRun
           dry_run: true
 
@@ -340,51 +336,46 @@ workflows:
           dry_run: true
 
   # ----------------------------------------------------------
-  # 3. QA — Post-merge deployment
+  # 3. PROD — PR validation (dry run only)
+  # Runs when a PR targets main and is not closed.
+  # ----------------------------------------------------------
+  validate-prod-pr:
+    when:
+      and:
+        - equal: [pull_request, << pipeline.event.name >>]
+        - not:
+            equal: [closed, << pipeline.event.action >>]
+        - equal: [main, << pipeline.event.github.pull_request.base.ref >>]
+    jobs:
+      - deploy:
+          name: validate-prod-pr
+          username: SF_PROD_USERNAME
+          client_id: SF_PROD_CLIENT_ID
+          instance_url: SF_PROD_INSTANCE_URL
+          jwt_key: JWT_KEY_PROD
+          test_level: RunSpecifiedTests
+          dry_run: true
+
+  # ----------------------------------------------------------
+  # 4. Post-merge deployment
   # ----------------------------------------------------------
   deploy_pipeline:
     jobs:
-
-      # QA — Validate (dry run) → Deploy
-      - deploy:
-          name: validate-qa
-          username: SF_QA_USERNAME
-          client_id: SF_QA_CLIENT_ID
-          instance_url: SF_QA_INSTANCE_URL
-          jwt_key: SANDBOX_CERT_KEY
-          test_level: NoTestRun
-          dry_run: true
-          filters:
-            branches:
-              only: main
+      # QA —  → Deploy
 
       - deploy:
           name: deploy-qa
           username: SF_QA_USERNAME
           client_id: SF_QA_CLIENT_ID
           instance_url: SF_QA_INSTANCE_URL
-          jwt_key: SANDBOX_CERT_KEY
+          jwt_key: JWT_KEY_QA
           test_level: NoTestRun
           dry_run: false
-          requires:
-            - validate-qa
           filters:
             branches:
-              only: main
+              only: qa
 
-      # UAT — Validate (dry run) → Deploy
-      - deploy:
-          name: validate-uat
-          username: SF_UAT_USERNAME
-          client_id: SF_UAT_CLIENT_ID
-          instance_url: SF_UAT_INSTANCE_URL
-          jwt_key: JWT_KEY_UAT
-          test_level: NoTestRun
-          dry_run: true
-          filters:
-            branches:
-              only: uat
-
+      # UAT —  → Deploy
       - deploy:
           name: deploy-uat
           username: SF_UAT_USERNAME
@@ -393,43 +384,27 @@ workflows:
           jwt_key: JWT_KEY_UAT
           test_level: NoTestRun
           dry_run: false
-          requires:
-            - validate-uat
           filters:
             branches:
               only: uat
 
-      # PROD — Validate → Manual approval → Deploy
-      #- deploy:
-       #   name: validate-prod
-        #  username: SF_PROD_USERNAME
-         # client_id: SF_PROD_CLIENT_ID
-          #instance_url: SF_PROD_INSTANCE_URL
-         # jwt_key: JWT_KEY_PROD
-         # test_level: RunSpecifiedTests
-         # dry_run: true
-         # filters:
-         #   branches:
-          #    only: main
+      # PROD — Manual approval → Deploy
+      - approve-prod:
+          type: approval
+          filters:
+            branches:
+              only: main
 
-      #- approve-prod:
-       #   type: approval
-        #  requires:
-        #    - validate-prod
-        #  filters:
-         #   branches:
-         #     only: main
-
-     # - deploy:
-      #    name: deploy-prod
-       #   username: SF_PROD_USERNAME
-       #   client_id: SF_PROD_CLIENT_ID
-       #   instance_url: SF_PROD_INSTANCE_URL
-       #   jwt_key: JWT_KEY_PROD
-       #   test_level: RunSpecifiedTests
-       #   dry_run: false
-       #   requires:
-       #     - approve-prod
-       #   filters:
-       #     branches:
-       #       only: main
+      - deploy:
+          name: deploy-prod
+          username: SF_PROD_USERNAME
+          client_id: SF_PROD_CLIENT_ID
+          instance_url: SF_PROD_INSTANCE_URL
+          jwt_key: JWT_KEY_PROD
+          test_level: RunSpecifiedTests
+          dry_run: false
+          requires:
+            - approve-prod
+          filters:
+            branches:
+              only: main
