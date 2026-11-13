@@ -2,6 +2,7 @@
 public with sharing class Accounthandler {
 
     // Retrieve active accounts with their industry and annual revenue
+    // This method is cacheable to improve performance for repeated calls
     @AuraEnabled(cacheable=true)
     public static List<Account> getRecentAccounts(Integer recordLimit) {
         return [
